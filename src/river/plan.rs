@@ -165,7 +165,10 @@ impl Loop {
 
         self.transmit_bindings();
 
-        if let Some(ls) = self.default_layer_output() {
+        // Where a layer surface that named no output should go. Restated every sequence like
+        // everything else here, so it follows focus from one output to the other without
+        // needing an event of its own.
+        if let Some(ls) = self.default_layer_output(self.focused_centre()) {
             ls.set_default();
         }
 

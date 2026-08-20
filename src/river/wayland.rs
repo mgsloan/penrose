@@ -115,6 +115,23 @@ pub(super) struct OutputEntry {
     pub(super) removed: bool,
 }
 
+/// Which output a layer surface that named none of its own belongs on.
+///
+/// Split out from [Loop::default_layer_output] so that the rule has a test: the alternative is
+/// a compositor, two monitors and a pair of eyes.
+///
+/// The output whose usable area contains `focus`, else the first usable one. An output with no
+/// usable area is one river has not finished describing, and cannot be nominated.
+fn nominated_output(areas: &[Option<Rect>], focus: Option<Point>) -> Option<usize> {
+    let focused = focus.and_then(|p| {
+        areas
+            .iter()
+            .position(|a| a.is_some_and(|r| r.contains_point(p)))
+    });
+
+    focused.or_else(|| areas.iter().position(Option::is_some))
+}
+
 impl OutputEntry {
     /// The area of this output penrose should lay windows out in, or `None` until river has told
     /// us where the output is and how big it is.
@@ -590,12 +607,43 @@ impl Loop {
         self.seats.iter().filter(|s| !s.removed).for_each(f);
     }
 
-    /// The layer shell object for the first usable output, which is where layer surfaces that do
-    /// not ask for an output themselves will be placed.
-    pub(super) fn default_layer_output(&self) -> Option<&RiverLayerShellOutputV1> {
-        self.outputs
-            .iter()
-            .find(|o| o.usable_area().is_some())?
+    /// The centre of the focused window, in the global coordinate space.
+    ///
+    /// Positions are restated in every sequence (see [RenderPlan]), so this is current rather
+    /// than a cached last-known. `None` when nothing is focused, or when river has not been
+    /// told where the focused window goes yet.
+    pub(super) fn focused_centre(&self) -> Option<Point> {
+        let id = self.manage.focus?;
+        let p = self.render.positions.get(&id)?;
+        let (w, h) = self.manage.dimensions.get(&id).copied().unwrap_or((0, 0));
+
+        Some(Point {
+            x: p.x + (w / 2) as i32,
+            y: p.y + (h / 2) as i32,
+        })
+    }
+
+    /// The layer shell object for the output that layer surfaces which name none of their own
+    /// should be placed on.
+    ///
+    /// River asks the window manager to nominate one. Staying silent is not neutral: it puts
+    /// them on whichever output it happens to iterate first -- "window manager did not set
+    /// default layer surface output, choosing arbitrary output", in its log -- and it makes no
+    /// promise about that order, as `republish_screens` notes for the same reason. A client
+    /// that asks for no output means "wherever the user is", and the first output river
+    /// mentions is not that.
+    ///
+    /// So the nomination follows the focused window, which is the best statement of where the
+    /// user is available at this level. Its centre rather than its corner, so that a window
+    /// straddling two outputs nominates the one it is mostly on. With nothing focused there is
+    /// nothing better to say than before, and the first usable output stands.
+    pub(super) fn default_layer_output(
+        &self,
+        focus: Option<Point>,
+    ) -> Option<&RiverLayerShellOutputV1> {
+        let areas: Vec<Option<Rect>> = self.outputs.iter().map(|o| o.usable_area()).collect();
+
+        self.outputs[nominated_output(&areas, focus)?]
             .layer_shell
             .as_ref()
     }
@@ -1015,3 +1063,84 @@ impl wayland_client::Dispatch<RiverLayerShellSeatV1, ()> for Loop {
 wayland_client::delegate_noop!(Loop: ignore RiverNodeV1);
 wayland_client::delegate_noop!(Loop: ignore RiverXkbBindingsV1);
 wayland_client::delegate_noop!(Loop: ignore RiverLayerShellV1);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const LAPTOP: Rect = Rect {
+        x: 0,
+        y: 0,
+        w: 1920,
+        h: 1080,
+    };
+    const EXTERNAL: Rect = Rect {
+        x: 1920,
+        y: 0,
+        w: 2560,
+        h: 1440,
+    };
+
+    /// The bug this rule exists for: focus is on the second output, and the
+    /// answer must not be the first one river happened to mention.
+    #[test]
+    fn focus_on_the_second_output_nominates_it() {
+        let areas = [Some(LAPTOP), Some(EXTERNAL)];
+
+        assert_eq!(
+            nominated_output(&areas, Some(Point { x: 3200, y: 700 })),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn focus_on_the_first_output_nominates_it() {
+        let areas = [Some(LAPTOP), Some(EXTERNAL)];
+
+        assert_eq!(
+            nominated_output(&areas, Some(Point { x: 960, y: 540 })),
+            Some(0)
+        );
+    }
+
+    /// Nothing focused: there is nothing better to say than there was before
+    /// this rule existed, and the first usable output stands.
+    #[test]
+    fn no_focus_falls_back_to_the_first_usable_output() {
+        let areas = [Some(LAPTOP), Some(EXTERNAL)];
+
+        assert_eq!(nominated_output(&areas, None), Some(0));
+    }
+
+    /// An output river has not finished describing has no usable area and
+    /// cannot be nominated, so the fallback skips past it.
+    #[test]
+    fn an_undescribed_output_is_skipped() {
+        let areas = [None, Some(EXTERNAL)];
+
+        assert_eq!(nominated_output(&areas, None), Some(1));
+        assert_eq!(
+            nominated_output(&areas, Some(Point { x: 3200, y: 700 })),
+            Some(1)
+        );
+    }
+
+    /// A point on no output at all -- which a window can be, briefly, while a
+    /// monitor is being unplugged -- falls back rather than nominating nothing.
+    #[test]
+    fn focus_outside_every_output_falls_back() {
+        let areas = [Some(LAPTOP), Some(EXTERNAL)];
+
+        assert_eq!(
+            nominated_output(&areas, Some(Point { x: 9000, y: 9000 })),
+            Some(0)
+        );
+    }
+
+    /// With no outputs there is nothing to nominate, and river will not be told.
+    #[test]
+    fn no_outputs_nominates_nothing() {
+        assert_eq!(nominated_output(&[], Some(Point { x: 0, y: 0 })), None);
+        assert_eq!(nominated_output(&[None], None), None);
+    }
+}
