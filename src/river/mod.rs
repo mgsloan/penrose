@@ -97,6 +97,10 @@ pub struct RiverConn {
     restore_order: HashMap<String, usize>,
     /// The identifier of the window that had focus before a restart.
     restore_focus: Option<String>,
+    /// Which tag each screen was showing before a restart, by screen index, ascending.
+    restore_screens: Vec<(usize, String)>,
+    /// Which of those screens had focus.
+    restore_focused_screen: Option<usize>,
     finished: bool,
 }
 
@@ -186,6 +190,8 @@ impl RiverConn {
             restore_tags: HashMap::new(),
             restore_order: HashMap::new(),
             restore_focus: None,
+            restore_screens: Vec::new(),
+            restore_focused_screen: None,
             finished: false,
         })
     }
@@ -263,6 +269,44 @@ impl RiverConn {
         }
     }
 
+    /// Put each screen back on the tag it was showing, and focus the screen that was current.
+    ///
+    /// Reports whether it had anything to go on, because that is what decides the fallback in
+    /// `manage_existing_clients`: with no record of the screens, the tag of the window that had
+    /// focus is still the best guess available.
+    ///
+    /// See [RiverConn::restore_screens] for why the order of `restore_screens` matters.
+    fn restore_screen_tags(&self, state: &mut State<Self>) -> bool {
+        if self.restore_screens.is_empty() {
+            return false;
+        }
+
+        let known: Vec<String> = state.client_set.ordered_tags();
+        let screens = state.client_set.screens().count();
+
+        for (index, tag) in &self.restore_screens {
+            if *index >= screens || !known.contains(tag) {
+                info!(index, tag, "dropping a saved screen that no longer applies");
+                continue;
+            }
+
+            state.client_set.focus_screen(*index);
+            state.client_set.pull_tag_to_screen(tag);
+        }
+
+        // Screen 0 rather than leaving whichever screen the loop above ended on, which is an
+        // artefact of the iteration rather than a decision.
+        let focused = self
+            .restore_focused_screen
+            .filter(|index| *index < screens)
+            .unwrap_or(0);
+
+        state.client_set.focus_screen(focused);
+        info!(focused, "restored the screens from before the restart");
+
+        true
+    }
+
     /// Name the bindings that go on working while the session is locked.
     ///
     /// Nothing does, by default. River matches a key against the window manager's bindings before
@@ -307,6 +351,32 @@ impl RiverConn {
     /// has nowhere to keep anything, so this comes from wherever the caller wrote it.
     pub fn restore_focus(mut self, identifier: Option<String>) -> Self {
         self.restore_focus = identifier;
+        self
+    }
+
+    /// Put each screen back on the tag it was showing before a restart.
+    ///
+    /// [RiverConn::restore_focus] almost does this on its own -- the focused window's tag is the
+    /// tag its screen was showing -- and for a long time it was all there was. It has two gaps,
+    /// and both of them are ordinary states rather than corner cases:
+    ///
+    /// * A workspace with no windows on it has no window to name it, so a restart from an empty
+    ///   workspace came back on the first tag.
+    /// * One focused window says nothing about what the *other* screens were showing, so every
+    ///   screen but one came back on whatever tag a fresh [StackSet] hands it.
+    ///
+    /// `tags` is `(screen index, tag)` and is applied in the order given, so it wants to be
+    /// ascending by index: pulling a tag to screen *n* can take it off a screen that already has
+    /// the tag it wanted, and going in order means the screens that have been dealt with are
+    /// never the ones it is taken from. `focused` is which screen ends up current.
+    ///
+    /// Entries for a screen that is no longer there, or a tag the config no longer has, are
+    /// dropped -- a monitor can be unplugged between one generation and the next.
+    ///
+    /// [StackSet]: crate::pure::StackSet
+    pub fn restore_screens(mut self, tags: Vec<(usize, String)>, focused: Option<usize>) -> Self {
+        self.restore_screens = tags;
+        self.restore_focused_screen = focused;
         self
     }
 
@@ -657,11 +727,20 @@ impl Conn for RiverConn {
         // Which workspace the session comes back up on. Without this it would be whichever one the
         // client set starts on, so a restart would move the user off the workspace they were
         // working on -- the same reason the X11 backend restores _NET_ACTIVE_WINDOW here.
+        //
+        // The screens first, because they are the record of which tag was where; focusing the
+        // client afterwards then only has to pick it out within the workspace it is already on,
+        // and cannot move a tag to a screen it was not on.
+        let screens_restored = self.restore_screen_tags(state);
+
         match had_focus {
             Some(id) => {
                 info!(%id, "focusing the client that had focus before the restart");
                 state.client_set.focus_client(&id);
             }
+            // An empty workspace has no window to name it, so before the screens were written
+            // down this is where a restart from one lost the user's place.
+            None if screens_restored => info!("nothing was focused before the restart"),
             None => {
                 if let Some(tag) = known.first() {
                     info!(%tag, "no focused client to restore: focusing the first tag");
