@@ -26,7 +26,7 @@ use crate::{
         bindings::{KeySym, MouseState},
         conn::WinId,
     },
-    pure::geometry::Point,
+    pure::geometry::{Point, Rect},
     river::{
         protocol::river_window_management_v1::river_window_v1::{Capabilities, Edges},
         wayland::Loop,
@@ -42,6 +42,11 @@ pub(super) struct ManagePlan {
     pub(super) dimensions: HashMap<WinId, (u32, u32)>,
     /// The window to focus, or `None` for `clear_focus`.
     pub(super) focus: Option<WinId>,
+    /// The screen penrose considers current, from [Conn::note_current_screen]. What the default
+    /// layer output is nominated from.
+    ///
+    /// [Conn::note_current_screen]: crate::core::conn::Conn::note_current_screen
+    pub(super) current_screen: Option<Rect>,
     /// Windows which have been told they are fullscreen. They keep the bounds penrose gave
     /// them: see the note in [Loop::transmit_manage].
     pub(super) fullscreen: HashSet<WinId>,
@@ -168,7 +173,7 @@ impl Loop {
         // Where a layer surface that named no output should go. Restated every sequence like
         // everything else here, so it follows focus from one output to the other without
         // needing an event of its own.
-        if let Some(ls) = self.default_layer_output(self.focused_centre()) {
+        if let Some(ls) = self.default_layer_output(self.current_screen_centre()) {
             ls.set_default();
         }
 

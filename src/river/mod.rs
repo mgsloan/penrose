@@ -717,6 +717,16 @@ impl Conn for RiverConn {
         Ok(())
     }
 
+    /// Which output a layer surface that named none of its own is placed on: see
+    /// [Loop::default_layer_output]. Compared before storing, like the positions below, so that
+    /// a refresh which moved nothing transmits nothing.
+    fn note_current_screen(&mut self, r: Rect) {
+        if self.manage.current_screen != Some(r) {
+            self.manage.current_screen = Some(r);
+            self.plan_dirty = true;
+        }
+    }
+
     /// A window's size is manage state and its position is render state, so this one call feeds
     /// both halves of the plan and lands on screen over two sequences.
     ///

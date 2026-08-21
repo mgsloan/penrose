@@ -122,6 +122,19 @@ pub trait Conn: Send + Sized {
     fn existing_clients(&mut self) -> Result<Vec<WinId>>;
     /// Request a client windows's current workspace
     fn manage_existing_clients(&mut self, state: &mut State<Self>) -> Result<()>;
+
+    /// Tell the backend which screen the user is currently on.
+    ///
+    /// Nothing here needs it, and the default does nothing: it exists for backends which have to
+    /// answer questions about "where the user is" that the window manager is not asked. The
+    /// river backend nominates the output that layer surfaces which name none of their own are
+    /// placed on, and this is what it nominates.
+    ///
+    /// The current screen rather than the focused window because it is defined either way: a
+    /// workspace with nothing on it is still the one being looked at.
+    #[allow(unused_variables)]
+    fn note_current_screen(&mut self, r: Rect) {}
+
     /// The dimensions of each currently available screen, in whatever order the backend has
     /// them.
     ///
@@ -275,6 +288,8 @@ pub trait ConnExt: Conn + Sized {
     ///
     /// See `restack` for details of how stacking order is determined.
     fn position_clients(&mut self, state: &State<Self>) -> Result<()> {
+        self.note_current_screen(state.client_set.current_screen().r);
+
         let border_width = state.config.border_width;
         let positions = &state.diff.after.positions;
         let screen_positions: Vec<_> = state.client_set.screens().map(|s| s.r).collect();

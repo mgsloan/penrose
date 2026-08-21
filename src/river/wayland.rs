@@ -607,19 +607,15 @@ impl Loop {
         self.seats.iter().filter(|s| !s.removed).for_each(f);
     }
 
-    /// The centre of the focused window, in the global coordinate space.
+    /// The centre of the screen penrose considers current, in the global coordinate space.
     ///
-    /// Positions are restated in every sequence (see [RenderPlan]), so this is current rather
-    /// than a cached last-known. `None` when nothing is focused, or when river has not been
-    /// told where the focused window goes yet.
-    pub(super) fn focused_centre(&self) -> Option<Point> {
-        let id = self.manage.focus?;
-        let p = self.render.positions.get(&id)?;
-        let (w, h) = self.manage.dimensions.get(&id).copied().unwrap_or((0, 0));
+    /// `None` before the first refresh, when penrose has not said yet.
+    pub(super) fn current_screen_centre(&self) -> Option<Point> {
+        let r = self.manage.current_screen?;
 
         Some(Point {
-            x: p.x + (w / 2) as i32,
-            y: p.y + (h / 2) as i32,
+            x: r.x + (r.w / 2) as i32,
+            y: r.y + (r.h / 2) as i32,
         })
     }
 
@@ -633,10 +629,12 @@ impl Loop {
     /// that asks for no output means "wherever the user is", and the first output river
     /// mentions is not that.
     ///
-    /// So the nomination follows the focused window, which is the best statement of where the
-    /// user is available at this level. Its centre rather than its corner, so that a window
-    /// straddling two outputs nominates the one it is mostly on. With nothing focused there is
-    /// nothing better to say than before, and the first usable output stands.
+    /// So the nomination follows the screen penrose considers current, which is its own answer
+    /// to where the user is -- the one `focus_screen` moves between. The focused window would
+    /// do for most of it and is undefined for the rest: a workspace with nothing on it is still
+    /// the one being looked at, and a client asking for no output while it is empty is exactly
+    /// the case a fullscreen overlay is opened in. Until penrose has said, which is before the
+    /// first refresh, the first usable output stands as it did before.
     pub(super) fn default_layer_output(
         &self,
         focus: Option<Point>,
@@ -1081,10 +1079,10 @@ mod tests {
         h: 1440,
     };
 
-    /// The bug this rule exists for: focus is on the second output, and the
+    /// The bug this rule exists for: the user is on the second output, and the
     /// answer must not be the first one river happened to mention.
     #[test]
-    fn focus_on_the_second_output_nominates_it() {
+    fn a_current_screen_on_the_second_output_nominates_it() {
         let areas = [Some(LAPTOP), Some(EXTERNAL)];
 
         assert_eq!(
@@ -1094,7 +1092,7 @@ mod tests {
     }
 
     #[test]
-    fn focus_on_the_first_output_nominates_it() {
+    fn a_current_screen_on_the_first_output_nominates_it() {
         let areas = [Some(LAPTOP), Some(EXTERNAL)];
 
         assert_eq!(
@@ -1103,10 +1101,11 @@ mod tests {
         );
     }
 
-    /// Nothing focused: there is nothing better to say than there was before
-    /// this rule existed, and the first usable output stands.
+    /// Before the first refresh penrose has not said which screen is current,
+    /// and there is nothing better to say than there was before this rule
+    /// existed: the first usable output stands.
     #[test]
-    fn no_focus_falls_back_to_the_first_usable_output() {
+    fn no_current_screen_falls_back_to_the_first_usable_output() {
         let areas = [Some(LAPTOP), Some(EXTERNAL)];
 
         assert_eq!(nominated_output(&areas, None), Some(0));
@@ -1125,10 +1124,11 @@ mod tests {
         );
     }
 
-    /// A point on no output at all -- which a window can be, briefly, while a
-    /// monitor is being unplugged -- falls back rather than nominating nothing.
+    /// A point on no output at all -- which the last known screen can be,
+    /// briefly, while a monitor is being unplugged -- falls back rather than
+    /// nominating nothing.
     #[test]
-    fn focus_outside_every_output_falls_back() {
+    fn a_point_outside_every_output_falls_back() {
         let areas = [Some(LAPTOP), Some(EXTERNAL)];
 
         assert_eq!(
