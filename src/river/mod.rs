@@ -25,7 +25,10 @@ use crate::{
         bindings::{KeyBindings, KeySym, MouseBindings, MouseState, dispatch_key, dispatch_mouse},
         conn::{Conn, ConnExt, WinId, manage_without_refresh},
     },
-    pure::geometry::{Point, Rect},
+    pure::{
+        Stack,
+        geometry::{Point, Rect},
+    },
 };
 use plan::{ManagePlan, Op, RenderPlan};
 use protocol::{
@@ -90,6 +93,8 @@ pub struct RiverConn {
 
     /// Which tag to put an existing window back on, keyed by river's window identifier.
     restore_tags: HashMap<String, String>,
+    /// Where in its workspace each window sat, keyed the same way as `restore_tags`.
+    restore_order: HashMap<String, usize>,
     /// The identifier of the window that had focus before a restart.
     restore_focus: Option<String>,
     finished: bool,
@@ -179,6 +184,7 @@ impl RiverConn {
             handled: 0,
             received: 0,
             restore_tags: HashMap::new(),
+            restore_order: HashMap::new(),
             restore_focus: None,
             finished: false,
         })
@@ -196,6 +202,65 @@ impl RiverConn {
     pub fn restore_tags(mut self, tags: HashMap<String, String>) -> Self {
         self.restore_tags = tags;
         self
+    }
+
+    /// Where in its workspace each window sat, so that a restart comes back looking the same.
+    ///
+    /// [RiverConn::restore_tags] puts each window on the right workspace and stops there, which
+    /// is not enough to leave the screen unchanged. A [Stack]'s first element is the main one
+    /// "regardless of focus", and adoption runs in river's window id order, so which window
+    /// lands in the master pane after a restart has nothing to do with which one was there
+    /// before. Same layout, same ratio, windows swapped.
+    ///
+    /// Keyed like the tags, on river's window identifier, and valued with the index within the
+    /// workspace -- `Workspace::clients` order, which is the stack order. Windows with no entry
+    /// sort after the ones that have one, keeping their relative order.
+    ///
+    /// [Stack]: crate::pure::Stack
+    pub fn restore_order(mut self, order: HashMap<String, usize>) -> Self {
+        self.restore_order = order;
+        self
+    }
+
+    /// Put each workspace's clients back in the order the previous generation had them.
+    ///
+    /// Done after adoption rather than by adopting in order, because the order clients end up in
+    /// is a property of where [Stack::insert_at] puts them rather than of the sequence they
+    /// arrive in -- `Position::Focus` swaps each new client into focus and pushes the last one
+    /// down, so adopting in order produces the reverse of it. Reordering afterwards says what is
+    /// wanted instead of encoding the inverse of how insertion happens to work.
+    ///
+    /// Focus is carried across rather than recomputed: it has been restored by identifier
+    /// already, and the stack order and the focused element are independent.
+    ///
+    /// [Stack::insert_at]: crate::pure::Stack::insert_at
+    fn restore_client_order(&self, state: &mut State<Self>) {
+        if self.restore_order.is_empty() {
+            return;
+        }
+
+        for ws in state.client_set.workspaces_mut() {
+            let Some(stack) = ws.stack_mut() else {
+                continue;
+            };
+
+            let focused = *stack.focused();
+            let mut ids: Vec<WinId> = stack.iter().copied().collect();
+
+            // A window with no saved index is new since the file was written -- nothing in a
+            // restart, but a stale file cannot make one disappear. `usize::MAX` puts it after
+            // everything that was saved, and the sort is stable, so those keep their order.
+            ids.sort_by_key(|id| {
+                self.window_identifier(*id)
+                    .and_then(|i| self.restore_order.get(&i).copied())
+                    .unwrap_or(usize::MAX)
+            });
+
+            if let Some(mut reordered) = Stack::try_from_iter(ids) {
+                reordered.focus_element(&focused);
+                *stack = reordered;
+            }
+        }
     }
 
     /// Name the bindings that go on working while the session is locked.
@@ -586,6 +651,8 @@ impl Conn for RiverConn {
                 manage_without_refresh(id, tag.as_deref(), state, self)?;
             }
         }
+
+        self.restore_client_order(state);
 
         // Which workspace the session comes back up on. Without this it would be whichever one the
         // client set starts on, so a restart would move the user off the workspace they were
