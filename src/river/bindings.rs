@@ -125,11 +125,8 @@ impl Loop {
     /// which bindings are live has to be settled by the time river matches the next key against
     /// them.
     pub(super) fn note_locked_key(&mut self, key: KeySym) {
-        self.locked_prefix = advance_while_locked(
-            &self.shared.allow_while_locked(),
-            &self.locked_prefix,
-            key,
-        );
+        self.locked_prefix =
+            advance_while_locked(&self.shared.allow_while_locked(), &self.locked_prefix, key);
     }
 
     /// Create binding objects for anything a seat does not have yet.
@@ -182,30 +179,29 @@ impl Loop {
         // While the session is locked, only what the config named: river matches keys against
         // these before the lock screen sees them, so anything left live is available to whoever
         // is in front of a locked machine. See `RiverConn::allow_while_locked`.
-        let (enabled, mouse_enabled): (HashSet<KeySym>, HashSet<&MouseState>) = if self
-            .session_locked
-        {
-            let live = self.keys_live_while_locked();
+        let (enabled, mouse_enabled): (HashSet<KeySym>, HashSet<&MouseState>) =
+            if self.session_locked {
+                let live = self.keys_live_while_locked();
 
-            (
-                self.grabbed_keys
-                    .iter()
-                    .chain(self.capture_continuations.iter())
-                    .filter(|k| live.contains(k))
-                    .copied()
-                    .collect(),
-                HashSet::new(),
-            )
-        } else {
-            (
-                self.grabbed_keys
-                    .iter()
-                    .chain(self.capture_continuations.iter())
-                    .copied()
-                    .collect(),
-                self.grabbed_mouse.iter().collect(),
-            )
-        };
+                (
+                    self.grabbed_keys
+                        .iter()
+                        .chain(self.capture_continuations.iter())
+                        .filter(|k| live.contains(k))
+                        .copied()
+                        .collect(),
+                    HashSet::new(),
+                )
+            } else {
+                (
+                    self.grabbed_keys
+                        .iter()
+                        .chain(self.capture_continuations.iter())
+                        .copied()
+                        .collect(),
+                    self.grabbed_mouse.iter().collect(),
+                )
+            };
 
         for seat in self.seats.iter().filter(|s| !s.removed) {
             for (key, binding) in seat.key_bindings.iter() {
