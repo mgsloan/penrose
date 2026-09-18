@@ -146,7 +146,7 @@ impl ClickData {
         // The same allocation and border width position_clients would pass, so that the window
         // does not change size when the button is released and that runs over the Rect stored
         // above.
-        conn.position_client(id, r, state.config.border_width)?;
+        conn.position_client(id, r, state.config.border_width, true)?;
 
         Ok(())
     }

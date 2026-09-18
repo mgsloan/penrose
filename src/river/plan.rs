@@ -40,6 +40,8 @@ use tracing::trace;
 pub(super) struct ManagePlan {
     /// Window content dimensions, from the `wh` half of `position_client`.
     pub(super) dimensions: HashMap<WinId, (u32, u32)>,
+    /// Whether each positioned window is in the tiled layer.
+    pub(super) tiled: HashMap<WinId, bool>,
     /// The window to focus, or `None` for `clear_focus`.
     pub(super) focus: Option<WinId>,
     /// The screen penrose considers current, from [Conn::note_current_screen]. What the default
@@ -108,12 +110,21 @@ impl Loop {
             }
         }
 
+        for (&id, &tiled) in self.manage.tiled.iter() {
+            if let Some(win) = self.live_window(id) {
+                if tiled {
+                    win.set_tiled(Edges::all());
+                } else {
+                    win.set_tiled(Edges::empty());
+                }
+            }
+        }
+
         for &id in self.manage.initial_props.iter() {
             if let Some(win) = self.live_window(id) {
                 // River draws the borders, so the window should not: penrose has no CSD support
                 // and would not know how big the client's own decorations were.
                 win.use_ssd();
-                win.set_tiled(Edges::all());
                 // The protocol's rule for this is that a window manager must not claim what it
                 // ignores. Maximize, minimize and the window menu are all ignored where their
                 // events are handled (`wayland.rs`), and penrose has no concept of any of them.

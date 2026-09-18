@@ -812,7 +812,7 @@ impl Conn for RiverConn {
     /// The client fills its whole allocation: river draws borders over the client's own edges
     /// rather than around them, so there is no room to make. Neighbouring windows then touch and
     /// the line between two of them is one border from each, which is the X11 picture.
-    fn position_client(&mut self, id: WinId, r: Rect, border: u32) -> Result<()> {
+    fn position_client(&mut self, id: WinId, r: Rect, border: u32, floating: bool) -> Result<()> {
         let dimensions = (r.w, r.h);
         let position = Point { x: r.x, y: r.y };
 
@@ -822,10 +822,11 @@ impl Conn for RiverConn {
         // position for every window whose size had changed -- which is every
         // window in a layout that just changed.
         let resized = self.manage.dimensions.insert(id, dimensions) != Some(dimensions);
+        let retiled = self.manage.tiled.insert(id, !floating) != Some(!floating);
         let moved = self.render.positions.insert(id, position) != Some(position);
         let reframed = self.render.border_widths.insert(id, border) != Some(border);
 
-        if resized || moved || reframed {
+        if resized || retiled || moved || reframed {
             self.plan_dirty = true;
         }
 

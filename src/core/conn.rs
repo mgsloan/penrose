@@ -157,7 +157,8 @@ pub trait Conn: Send + Sized {
     ///
     /// A width of 0 means this client should have no border: penrose asks for that when a client
     /// fills its whole screen, where there is nothing for a border to separate it from.
-    fn position_client(&mut self, id: WinId, r: Rect, border: u32) -> Result<()>;
+    /// `floating` lets backends communicate whether the allocation belongs to the tiled layer.
+    fn position_client(&mut self, id: WinId, r: Rect, border: u32, floating: bool) -> Result<()>;
     /// Display a client on the screen at its current position.
     fn show_client(&mut self, id: WinId, state: &mut State<Self>) -> Result<()>;
     /// Hide a client
@@ -305,7 +306,8 @@ pub trait ConnExt: Conn + Sized {
                 border_width
             };
 
-            self.position_client(c, r, border)?;
+            let floating = state.client_set.floating.contains_key(&c);
+            self.position_client(c, r, border, floating)?;
         }
 
         Ok(())

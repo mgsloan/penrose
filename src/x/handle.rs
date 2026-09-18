@@ -51,7 +51,7 @@ pub(crate) fn configure_request<X: XConn>(
 
     // The client asked for this geometry itself, so it is already what it wants: no border is
     // fitted into it.
-    x.position_client(*id, *r, 0)
+    x.position_client(*id, *r, 0, true)
 }
 
 pub(crate) fn map_request<X: XConn>(id: WinId, state: &mut State<X>, x: &mut X) -> Result<()> {
